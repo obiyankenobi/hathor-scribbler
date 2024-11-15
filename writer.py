@@ -13,6 +13,7 @@ BASE_URL = 'http://localhost:PORT/'
 WALLET_ID = '_id'
 HEADERS = { 'X-Wallet-Id': WALLET_ID }
 NETWORK = 'mainnet'
+FIRST_ADDRESS = None
 
 class Token(NamedTuple):
     name: str
@@ -32,6 +33,8 @@ def get_wallet_endpoint(command: str) -> str:
         'status': '/wallet/status',
         'balance': '/wallet/balance',
         'addresses': '/wallet/addresses',
+        'send': '/wallet/send-tx',
+        'create-nft': '/wallet/create-nft'
     }
     return urllib.parse.urljoin(BASE_URL, endpoints[command])
 
@@ -50,12 +53,15 @@ def check_wallet_status() -> str:
         # If the wallet is not started, the 'success' key will be set to False.
         # If it's started, there's will be no 'success' key and we can get the 
         # 'statusMessage' key
+        print_debug('check_wallet_status', resp)
         if 'success' in resp and not resp['success']:
             # wallet not started
+            print_debug('check_wallet_status not started')
             return 'Not started'
         elif 'statusMessage' in resp:
             global NETWORK
             NETWORK = resp['network']
+            print_debug('check_wallet_status started', resp)
             return resp['statusMessage']
         else:
             print('Unknown wallet status, exiting')
@@ -64,7 +70,11 @@ def check_wallet_status() -> str:
     except Exception as err:
         frameinfo = getframeinfo(currentframe())
         print('ERROR', frameinfo.lineno, err)
+        print('Is the wallet headless running?')
         sys.exit(-1)
+
+def is_wallet_ready() -> bool:
+    return check_wallet_status() == 'Ready'
 
 
 def _get_addresses() -> list[str]:
@@ -79,6 +89,7 @@ def _get_addresses() -> list[str]:
     except Exception as err:
         frameinfo = getframeinfo(currentframe())
         print('ERROR', frameinfo.lineno, err)
+        print('Is the wallet headless running?')
         sys.exit(-1)
 
 
@@ -106,19 +117,20 @@ def _get_tokens(address: str) -> list[str]:
     except Exception as err:
         frameinfo = getframeinfo(currentframe())
         print('ERROR', frameinfo.lineno, err)
+        print('Is the wallet headless running?')
         sys.exit(-1)
 
 
 # TODO add type definition
 def get_tokens():
-    if check_wallet_status() != 'Ready':
-        print('Wallet not ready')
-        return
-
     tokens = {}
-    #for address in _get_addresses():
+    #addresses = _get_addresses()
     # TODO to speed up
-    for address in _get_addresses()[:3]:
+    addresses = _get_addresses()[:3]
+    global FIRST_ADDRESS
+    FIRST_ADDRESS = addresses[0]
+
+    for address in addresses:
         # merge the dicts
         tokens |= _get_tokens(address)
         # sleep so we don't hit the API rate limit, as we are fetching from remote endpoint
@@ -141,6 +153,34 @@ def _print_tokens(tokens):
         print('{}: {}, {}, {}'.format(count, t.symbol, t.name, t.uid))
 
 
+def _store_info(info: str, token_uid: str, address: str) -> bool:
+    payload = { 'outputs': [
+            { 'type': 'data', 'data': info },
+            { 'address': address, 'value': 1, 'token': token_uid }
+        ]
+    }
+    print_debug('_store_info payload', payload)
+    try:
+        r = requests.post(get_wallet_endpoint('send'), headers = HEADERS, json = payload)
+        if r.status_code != 200:
+            print_debug('_store_info exit', r.status_code, r.text)
+            sys.exit(-1)
+        
+        resp = r.json()
+        if not resp['success']:
+            print('Error sending transaction', resp)
+            return False
+        else:
+            print('Successfully stored, tx hash', resp['hash'])
+            return True
+        
+    except Exception as err:
+        frameinfo = getframeinfo(currentframe())
+        print('ERROR', frameinfo.lineno, err)
+        print('Is the wallet headless running?')
+        sys.exit(-1)
+
+
 def add_new_entry(tokens):
     _print_tokens(tokens)
     choice = int(input('Add to which token? '))
@@ -149,14 +189,52 @@ def add_new_entry(tokens):
     info = input('What information shall be stored? ')
     print('Storing on token {} ({}) the following information: {}'.format(token.name, token.symbol, info))
     
-    confirm = False
-    while not confirm:
-        inp = input("Confirm [y/n]?")
-        confirm = inp if inp == 'y' or inp == 'n' else False
+    confirm = input("Confirm [y/n]?")
     
     if confirm == 'y':
-        # TODO store token
-        pass
+        _store_info(info, token.uid, FIRST_ADDRESS)
+    elif confirm == 'n':
+        print('Operation aborted')
+    else:
+        print('Unknown path')
+
+
+def _create_token(name: str, symbol:str, info: str):
+    payload = { 'name': name, 'symbol': symbol, 'amount': 1, 'data': info, 'address': FIRST_ADDRESS , 'change_address': FIRST_ADDRESS }
+    print_debug('_create_token payload', payload)
+    try:
+        r = requests.post(get_wallet_endpoint('create-nft'), headers = HEADERS, json = payload)
+        if r.status_code != 200:
+            print_debug('_create_token exit', r.status_code, r.text)
+            sys.exit(-1)
+        
+        resp = r.json()
+        if not resp['success']:
+            print('Error creating token', resp)
+            return None
+        else:
+            uid = resp['hash']
+            print('Successfully created token', uid)
+            return Token(name, symbol, uid) 
+
+    except Exception as err:
+        frameinfo = getframeinfo(currentframe())
+        print('ERROR', frameinfo.lineno, err)
+        print('Is the wallet headless running?')
+        sys.exit(-1)
+
+def create_token():
+    symbol = input('What\'s the token symbol? ')
+    name = input('What\'s the token name? ')
+    info = input('What\'s the initial information to be stored? ')
+    print('Name:', name)
+    print('Symbol:', symbol)
+    print('Information:', info)
+    
+    confirm = input("Confirm [y/n]?")
+    
+    if confirm == 'y':
+        return _create_token(name, symbol, info)
     elif confirm == 'n':
         print('Operation aborted')
     else:
@@ -198,6 +276,7 @@ def start_wallet(seed: str) -> None:
     except Exception as err:
         frameinfo = getframeinfo(currentframe())
         print('ERROR', frameinfo.lineno, err)
+        print('Is the wallet headless running?')
         sys.exit(-1)
 
 
@@ -206,9 +285,12 @@ def main(port: str, seed: str, debug: bool):
     global BASE_URL, DEBUG
     DEBUG = debug
     BASE_URL = BASE_URL.replace('PORT', port)
+
+    # TODO check if wallet is started
+    # set network and first address
     
     while True:
-        print('\nWhat would you like to do')
+        print('\nWhat would you like to do?')
         print('1. Add new entry to existing tokens')
         print('2. Check existing tokens')
         print('3. Create new token')
@@ -217,16 +299,24 @@ def main(port: str, seed: str, debug: bool):
         print('6. Exit')
         choice = int(input("Choose option: "))
         if choice == 1:
+            if not is_wallet_ready():
+                print('Wallet not ready\n')
+                continue
             if not tokens:
                 print('Fetching tokens...')
                 tokens = get_tokens()
             add_new_entry(tokens)
         elif choice == 2:
+            if not is_wallet_ready():
+                print('Wallet not ready\n')
+                continue
             if not tokens:
                 print('Fetching tokens...')
                 tokens = get_tokens()
             _print_tokens(tokens)
         elif choice == 3:
+            token = create_token()
+            if token: tokens.append(token)
             pass
         elif choice == 4:
             start_wallet(seed)
