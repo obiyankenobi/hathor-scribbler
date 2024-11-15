@@ -22,7 +22,9 @@ class Token(NamedTuple):
 
 
 # TODO add docstring to all methods
+# TODO add types to all methods
 # TODO proper logging: https://docs.python.org/3/howto/logging.html
+# TODO check HTR balance
 
 def print_debug(*args, **kwargs) -> None:
     if DEBUG: print(*args, **kwargs)
@@ -121,12 +123,11 @@ def _get_tokens(address: str) -> list[str]:
         sys.exit(-1)
 
 
-# TODO add type definition
 def get_tokens():
     tokens = {}
-    #addresses = _get_addresses()
+    addresses = _get_addresses()
     # TODO to speed up
-    addresses = _get_addresses()[:3]
+    #addresses = _get_addresses()[:3]
     global FIRST_ADDRESS
     FIRST_ADDRESS = addresses[0]
 
